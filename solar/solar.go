@@ -1,6 +1,8 @@
 package solar
 
 import (
+	"github.com/Lofanmi/chinese-calendar-golang/base"
+	"strconv"
 	"time"
 
 	"github.com/Lofanmi/chinese-calendar-golang/animal"
@@ -15,6 +17,7 @@ type Solar struct {
 	CurrentSolarterm *solarterm.Solarterm
 	PrevSolarterm    *solarterm.Solarterm
 	NextSolarterm    *solarterm.Solarterm
+	base.Common
 }
 
 var weekAlias = [...]string{
@@ -83,6 +86,24 @@ func (solar *Solar) GetMonth() int64 {
 // GetDay 日
 func (solar *Solar) GetDay() int64 {
 	return int64(solar.t.Day())
+}
+
+// GetMonthStr 月
+func (solar *Solar) GetMonthStr() string {
+	month := solar.GetMonth()
+	if month <= 9 {
+		return "0" + strconv.Itoa(int(month))
+	}
+	return strconv.Itoa(int(month))
+}
+
+// GetDayStr 日
+func (solar *Solar) GetDayStr() string {
+	day := solar.GetDay()
+	if day <= 9 {
+		return "0" + strconv.Itoa(int(day))
+	}
+	return strconv.Itoa(int(day))
 }
 
 // GetHour 时
