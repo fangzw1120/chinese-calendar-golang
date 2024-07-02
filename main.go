@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"git.woa.com/forisfang_tut/logger"
 	"github.com/Lofanmi/chinese-calendar-golang/calendar"
+	"github.com/Lofanmi/chinese-calendar-golang/lunar"
 	"github.com/alecthomas/kingpin"
 	"github.com/xuri/excelize/v2"
 	"os"
@@ -27,6 +28,7 @@ type User struct {
 	Birthday       string
 	DateType       string
 	FutureBirthday map[int64]string
+	Extra          string
 }
 
 const (
@@ -80,9 +82,12 @@ func main() {
 	kingpin.Flag("OutFileName", "OutFileName").StringVar(&gcfg.OutFileName)
 	kingpin.Parse() // first parse conf
 
-	logPath := GetMainDirectory()
-	//"/Users/forisfang/project/github/chinese-calendar-golang/logs/"
+	basePath := GetMainDirectory()
+	basePath = "/Users/forisfang_mbp16/work/project/github/chinese-calendar-golang/"
+	logPath := basePath + "logs/"
+
 	logger.Init(logPath, "tmp.log", true, false, true)
+	logger.Infof("config: %+v", gcfg)
 	//t := time.Now()
 	// 1. ByTimestamp
 	// 时间戳
@@ -94,14 +99,22 @@ func main() {
 	// 农历(最后一个参数表示是否闰月)
 	//c := calendar.ByLunar(year, month, day, hour, minute, second, false)
 
-	//filePath := "/Users/forisfang/Desktop/Book1.xlsx"
 	filePath := GetMainDirectory() + gcfg.FileName
+	outFilePath := GetMainDirectory() + gcfg.OutFileName
+	logger.Infof("filePath: %+v, outFilePath %+v", filePath, outFilePath)
+
+	// parse xls, get birthday and type
 	header, sheetName, err := readExcelFile(filePath)
 	if err != nil {
 		logger.Errorf("%+v", err)
+		return
 	}
+	logger.Infof("sheetName: %+v, header %+v", sheetName, header)
+
+	// get parse result
 	users = GetAllUser()
 
+	// target years list
 	nowYear := time.Now().Year()
 	totYears := period
 	yearLT := make([]int64, totYears)
@@ -113,23 +126,36 @@ func main() {
 	}
 	logger.Debugf("calculate period: %+v", yearLT)
 
-	// for user
+	// generate target year birthday
 	cnt := 0
-	for _, user := range users {
+	for i, user := range users {
 		cnt++
-		logger.Infof("user: %+v", user)
+		//logger.Infof("%+v: user: %+v", i+1, user)
 		futureBirthday := make(map[int64]string, totYears)
+		extra := ""
 		for _, year := range yearLT {
-			if user.DateType == "农历" {
-				// 对应年份农历的时间对象
-				valLunarItem := calendar.ByLunar(year, user.Month, user.Day, 0, 0, 0, false)
-				// 对应年份农历
-				//valLunar := valLunarItem.Lunar
+			if user.DateType == "农历" || user.DateType == "阴历" {
+				// 目标年份的农历时间对象
+				isLeapMonth := false
+				valLunarItem := calendar.ByLunar(year, user.Month, user.Day, 0, 0, 0, isLeapMonth)
+
+				maxDays := lunar.LunarDays(year, user.Month)
+				if isLeapMonth {
+					maxDays = lunar.LeapDays(year)
+				}
+				oldDay := user.Day
+				newDay := lunar.ReCorrectDay(oldDay, maxDays)
+				if oldDay != newDay {
+					extra += fmt.Sprintf("农历%+v年-%+v月-%+v日, 转为%+v月-%+v日;", year, user.Month, oldDay, user.Month, newDay)
+				}
 				// 对应年份公历
 				valSolar := valLunarItem.Solar
+				// 目标年份农历对应的阳历日期
 				futureBirthday[year] = fmt.Sprintf("%+v-%+v-%+v", valSolar.GetYear(), valSolar.GetMonthStr(), valSolar.GetDayStr())
+				//// 对应年份农历
+				//valLunar := valLunarItem.Lunar
 				//logger.Debugf("年份: %+v, 农历: %+v-%+v-%+v, Solar: %+v-%+v-%+v", year,
-				//	valLunar.GetYear(), valLunar.GetMonthStr(), valLunar.GetDayStr(),
+				//	valLunar.GetYear(), valLunar.GetMonth(), valLunar.GetDay(),
 				//	valSolar.GetYear(), valSolar.GetMonthStr(), valSolar.GetDayStr())
 
 			} else if user.DateType == "阳历" {
@@ -148,12 +174,14 @@ func main() {
 			}
 		}
 		user.FutureBirthday = futureBirthday
-		logger.Debugf("user: %+v", user)
+		user.Extra = extra
+		logger.Infof("%+v: user: %+v", i+1, user)
 	}
 	logger.Infof("tot user: %+v", cnt)
 
+	// new header and output
 	newHeader := append(header, yearStrLt...)
-	writeToFile(GetMainDirectory()+gcfg.OutFileName, sheetName, newHeader, yearLT, users)
+	writeToFile(outFilePath, sheetName, newHeader, yearLT, users)
 
 	//t := time.Now()
 	//c := calendar.ByTimestamp(t.Unix())
@@ -168,13 +196,11 @@ func main() {
 	//logger.Debug(lunarStr)
 }
 
-func GetAllUser() []*User {
-	return users
-}
-
 func readExcelFile(path string) ([]string, string, error) {
 	header := make([]string, 0)
 	sheetName := ""
+
+	// open file
 	f, err := excelize.OpenFile(path)
 	if err != nil {
 		logger.Error(err.Error())
@@ -182,7 +208,7 @@ func readExcelFile(path string) ([]string, string, error) {
 	}
 	defer func() {
 		// Close the spreadsheet.
-		if err := f.Close(); err != nil {
+		if err = f.Close(); err != nil {
 			logger.Error(err.Error())
 		}
 	}()
@@ -200,8 +226,10 @@ func readExcelFile(path string) ([]string, string, error) {
 		return header, sheetName, err
 	}
 
+	// loop row
 	idIdx, nameIdx, birthIdx, typeIdx := -1, -1, -1, -1
 	for i, row := range rows {
+		// first row as header
 		if i == 0 {
 			header = row
 			if idIdx, nameIdx, birthIdx, typeIdx = headerIndex(header); idIdx == -1 || nameIdx == -1 || birthIdx == -1 {
@@ -209,14 +237,17 @@ func readExcelFile(path string) ([]string, string, error) {
 				logger.Errorf("%+v: %+v", msg, header)
 				return header, sheetName, errors.New(msg)
 			}
-			logger.Infof("Header: %+v", header)
+			logger.Debugf("Header: %+v", header)
 			continue
 		}
 
+		// birthday column to correct format
 		birthday := row[birthIdx]
 		dateType := row[typeIdx]
 		newBirthday := formatBirthday(f, row, sheetName, birthday, i)
+		logger.Debugf("%+v: %+v, newBirthday %+v, dateType %+v", i, row, newBirthday, dateType)
 
+		// birthday to year, month, day
 		year, month, day := birthSplit(newBirthday)
 		user := User{
 			ID:       row[idIdx],
@@ -227,12 +258,67 @@ func readExcelFile(path string) ([]string, string, error) {
 			Birthday: newBirthday,
 			DateType: dateType,
 		}
-		logger.Debugf("user: %+v", user)
+		logger.Debugf("%+v: user: %+v", i, user)
 		users = append(users, &user)
 	}
 	return header, sheetName, nil
 }
 
+func GetAllUser() []*User {
+	return users
+}
+
+// headerIndex ...
+// @Description: get header index
+func headerIndex(header []string) (int, int, int, int) {
+	idIdx := indexOf(UserIDHeader, header)
+	nameIdx := indexOf(UserNameHeader, header)
+	birthIdx := indexOf(UserBirthHeader, header)
+	dateTypeIdx := indexOf(UserDateTypeHeader, header)
+	return idIdx, nameIdx, birthIdx, dateTypeIdx
+}
+
+func indexOf(element string, data []string) int {
+	for k, v := range data {
+		if element == v {
+			return k
+		}
+	}
+	return -1 //not found.
+}
+
+func indexOfInt(element int64, data []int64) int {
+	for k, v := range data {
+		if element == v {
+			return k
+		}
+	}
+	return -1 //not found.
+}
+
+// formatBirthday ...
+// @Description: birthday to correct format
+func formatBirthday(f *excelize.File, row []string, sheetName, birthday string, i int) string {
+	cellIdx := strconv.Itoa(i + 1)
+	cellPre := toCharStr(indexOf(birthday, row) + 1)
+	cellName := cellPre + cellIdx
+	//logger.Debugf("%+v, %+v, %+v, %+v th row, birthday cell: %+v", sheetName, row, birthday, i, cellName)
+	return formatDate(f, sheetName, cellName)
+}
+
+func toCharStr(i int) string {
+	return string('A' - 1 + i)
+}
+
+func formatDate(f *excelize.File, sheetName string, cellName string) string {
+	style, _ := f.NewStyle(&excelize.Style{NumFmt: 34, Lang: "ko-kr"})
+	f.SetCellStyle(sheetName, cellName, cellName, style)
+	e7, _ := f.GetCellValue(sheetName, cellName)
+	return e7
+}
+
+// birthSplit ...
+// @Description: parse birthday
 func birthSplit(birthday string) (int64, int64, int64) {
 	sep := "-"
 	year, month, day := int64(-1), int64(-1), int64(-1)
@@ -260,53 +346,7 @@ func birthSplit(birthday string) (int64, int64, int64) {
 	return year, month, day
 }
 
-func headerIndex(header []string) (int, int, int, int) {
-	idIdx := indexOf(UserIDHeader, header)
-	nameIdx := indexOf(UserNameHeader, header)
-	birthIdx := indexOf(UserBirthHeader, header)
-	dateTypeIdx := indexOf(UserDateTypeHeader, header)
-	return idIdx, nameIdx, birthIdx, dateTypeIdx
-}
-
-func indexOf(element string, data []string) int {
-	for k, v := range data {
-		if element == v {
-			return k
-		}
-	}
-	return -1 //not found.
-}
-
-func indexOfInt(element int64, data []int64) int {
-	for k, v := range data {
-		if element == v {
-			return k
-		}
-	}
-	return -1 //not found.
-}
-
-func formatDate(f *excelize.File, sheetName string, cellName string) string {
-	style, _ := f.NewStyle(&excelize.Style{NumFmt: 34, Lang: "ko-kr"})
-	f.SetCellStyle(sheetName, cellName, cellName, style)
-	e7, _ := f.GetCellValue(sheetName, cellName)
-	return e7
-}
-
-func formatBirthday(f *excelize.File, row []string, sheetName, birthday string, i int) string {
-	cellIdx := strconv.Itoa(i + 1)
-	cellPre := toCharStr(indexOf(birthday, row) + 1)
-	cellName := cellPre + cellIdx
-	logger.Debugf("%+v, %+v, %+v, %+v th row, birthday cell: %+v", sheetName, row, birthday, i, cellName)
-	return formatDate(f, sheetName, cellName)
-}
-
-func toCharStr(i int) string {
-	return string('A' - 1 + i)
-}
-
 func checkResult() {
-
 }
 
 func writeToFile(filePath, sheetName string, newHeader []string, totYears []int64, users []*User) {
@@ -316,12 +356,14 @@ func writeToFile(filePath, sheetName string, newHeader []string, totYears []int6
 	idx, err := f.NewSheet(newSheetName) //creating the new sheet names
 	if err != nil {
 		logger.Errorf("%+v", err)
+		return
 	}
 	// set header
 	for i, headerName := range newHeader {
 		rowIdx := "1"
 		prefix := toCharStr(i + 1)
 		f.SetCellValue(newSheetName, prefix+rowIdx, headerName)
+		logger.Debugf("%+v: %+v, %+v", newSheetName, prefix+rowIdx, headerName)
 	}
 
 	// set user
@@ -331,15 +373,20 @@ func writeToFile(filePath, sheetName string, newHeader []string, totYears []int6
 		f.SetCellValue(newSheetName, "B"+rowIdx, user.Name)
 		f.SetCellValue(newSheetName, "C"+rowIdx, user.Birthday)
 		f.SetCellValue(newSheetName, "D"+rowIdx, user.DateType)
+		//logger.Debugf("%+v: %+v, %+v", newSheetName, rowIdx, user)
 
 		for j, year := range totYears {
-			cellName := toCharStr(j+4) + rowIdx
+			cellName := toCharStr(j+5) + rowIdx
 			f.SetCellValue(newSheetName, cellName, user.FutureBirthday[year])
+			//logger.Debugf("%+v: %+v, %+v", newSheetName, cellName, user.FutureBirthday[year])
 		}
+		cellName := toCharStr(len(totYears)+5) + rowIdx
+		f.SetCellValue(newSheetName, cellName, user.Extra)
 	}
 
 	f.SetActiveSheet(idx)
-	if err := f.SaveAs(filePath); err != nil { //saving the new sheet in the file names companies
+	if err = f.SaveAs(filePath); err != nil { //saving the new sheet in the file names companies
 		logger.Errorf("%+v", err)
+		return
 	}
 }

@@ -165,6 +165,8 @@ func ToSolarTimestamp(year, month, day, hour, minute, second int64, isLeapMonth 
 	if day > maxDays {
 		return 0
 	}
+	//day = ReCorrectDay(day, maxDays)
+
 	// 计算农历的时间差
 	offset = 0
 	for i = 1900; i < year; i++ {
@@ -191,6 +193,25 @@ func ToSolarTimestamp(year, month, day, hour, minute, second int64, isLeapMonth 
 	var startTimestamp int64 = -2206512000
 
 	return (offset+day)*86400 + startTimestamp + hour*3600 + minute*60 + second
+}
+
+func ReCorrectDay(day, maxDays int64) int64 {
+	if day <= maxDays {
+		return day
+	}
+	// 出生农历有的日期在目标年没有
+	// 例如不是每一年都有大年30，那就用大年29代替
+
+	target := day
+	for {
+		if target <= 1 {
+			return 1
+		}
+		if target <= maxDays {
+			return target
+		}
+		target -= 1
+	}
 }
 
 // LeapMonth 获取闰月(0表示不闰, 5表示闰五月)
@@ -306,4 +327,12 @@ func lunarDays(year, month int64) (days int64) {
 		days = 29
 	}
 	return
+}
+
+func LunarDays(year, month int64) (days int64) {
+	return lunarDays(year, month)
+}
+
+func LeapDays(year int64) (days int64) {
+	return leapDays(year)
 }
